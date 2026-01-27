@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: gh-attach --issue <number> --image <path> [options]
+
+Options:
+  --repo <owner/repo>   Target repository (default: current repo)
+  --issue <number>      Issue or PR number (required)
+  --image <path>        Image file path to upload (required)
+  --width <px>          Image width in pixels (default: 500)
+  --body <text>         Comment body text
+  --body-file <path>    Read comment body from file
+  --alt <text>          Alt text for the image (default: filename)
+  --host <host>         GitHub host (auto-detected)
+  --uploads-host <host> Uploads host (default: uploads.<host>)
+  -h, --help            Show help
+
+Examples:
+  gh-attach --issue 123 --image ./e2e.png --width 500 --body-file report.md
+  gh-attach --repo acme/app --issue 12 --image ./shot.png --host github.myco.com
+USAGE
+}
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh CLI is required." >&2
+  exit 1
+fi
+
+repo=""
+issue=""
+image=""
+width="500"
+body=""
+body_file=""
+host=""
+uploads_host=""
+alt=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) repo="$2"; shift 2;;
+    --issue) issue="$2"; shift 2;;
+    --image) image="$2"; shift 2;;
+    --width) width="$2"; shift 2;;
+    --body) body="$2"; shift 2;;
+    --body-file) body_file="$2"; shift 2;;
+    --alt) alt="$2"; shift 2;;
+    --host) host="$2"; shift 2;;
+    --uploads-host) uploads_host="$2"; shift 2;;
+    -h|--help) usage; exit 0;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$issue" || -z "$image" ]]; then
+  echo "--issue and --image are required." >&2
+  usage
+  exit 1
+fi
+
+if [[ -n "$body" && -n "$body_file" ]]; then
+  echo "Use only one of --body or --body-file." >&2
+  exit 1
+fi
+
+if [[ ! -f "$image" ]]; then
+  echo "Image not found: $image" >&2
+  exit 1
+fi
+
+if [[ -n "$body_file" ]]; then
+  body="$(cat "$body_file")"
+fi
+
+if [[ -z "$repo" ]]; then
+  if [[ -n "$host" ]]; then
+    repo="$(gh repo view --hostname "$host" --json nameWithOwner -q .nameWithOwner)"
+  else
+    repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+  fi
+fi
+
+if [[ -z "$host" ]]; then
+  repo_url="$(gh repo view "$repo" --json url -q .url)"
+  host="$(echo "$repo_url" | sed -E 's#https?://([^/]+)/.*#\1#')"
+fi
+
+if [[ -z "$uploads_host" ]]; then
+  uploads_host="uploads.$host"
+fi
+
+if [[ -z "$alt" ]]; then
+  alt="$(basename "$image")"
+fi
+
+content_type="$(file -b --mime-type "$image" || true)"
+if [[ -z "$content_type" ]]; then
+  content_type="application/octet-stream"
+fi
+
+placeholder="<!-- gh-attach:IMAGE -->"
+if [[ -z "$body" ]]; then
+  body_with_placeholder="$placeholder"
+else
+  body_with_placeholder="${body}"$'\n\n'"$placeholder"
+fi
+
+comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '.id + "\t" + .html_url')"
+comment_id="${comment_info%%$'\t'*}"
+comment_url="${comment_info#*$'\t'}"
+
+python_bin=""
+if command -v python3 >/dev/null 2>&1; then
+  python_bin="python3"
+elif command -v python >/dev/null 2>&1; then
+  python_bin="python"
+else
+  echo "python (for URL-encoding the filename) is required." >&2
+  exit 1
+fi
+
+encoded_name="$($python_bin - <<'PY' "$image"
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1].split('/')[-1]))
+PY
+)"
+
+auth_token="$(gh auth token -h "$host")"
+upload_url="$(gh api -X POST \
+  -H "Authorization: token $auth_token" \
+  -H "Content-Type: $content_type" \
+  --input "$image" \
+  "https://$uploads_host/repos/$repo/issues/$issue/comments/$comment_id/attachments?name=$encoded_name" \
+  --jq .url)"
+
+img_tag="<img src=\"$upload_url\" width=\"$width\" alt=\"$alt\">"
+body_with_image="${body_with_placeholder//$placeholder/$img_tag}"
+
+gh api --hostname "$host" -X PATCH "repos/$repo/issues/comments/$comment_id" -f body="$body_with_image" >/dev/null
+
+echo "Comment updated: $comment_url"
