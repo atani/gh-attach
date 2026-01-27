@@ -11,6 +11,26 @@ Works with both GitHub.com and GitHub Enterprise.
 
 ## Install
 
+### Homebrew (recommended)
+
+```bash
+# 1. Install gh-attach (also installs gh and node)
+brew tap atani/gh-attach
+brew install gh-attach
+
+# 2. Install playwright-cli
+npm install -g @playwright/mcp
+
+# 3. Authenticate gh CLI (if not already done)
+gh auth login
+
+# 4. Login to GitHub in browser (first time only)
+gh-attach --issue 1 --image ./test.png --headed
+# → Browser opens → Login to GitHub → Session saved
+```
+
+### Manual
+
 1. Install dependencies:
 
 ```bash
@@ -32,7 +52,9 @@ ln -s /path/to/gh-attach/bin/gh-attach /usr/local/bin/gh-attach
 export PATH="/path/to/gh-attach/bin:$PATH"
 ```
 
-3. Login to GitHub in the browser session (first run):
+### First run
+
+Login to GitHub in the browser session:
 
 ```bash
 gh-attach --issue 1 --image ./test.png --headed
