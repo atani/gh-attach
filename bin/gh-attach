@@ -99,11 +99,6 @@ if [[ -z "$alt" ]]; then
   alt="$(basename "$image")"
 fi
 
-content_type="$(file -b --mime-type "$image" || true)"
-if [[ -z "$content_type" ]]; then
-  content_type="application/octet-stream"
-fi
-
 placeholder="<!-- gh-attach:IMAGE -->"
 if [[ -z "$body" ]]; then
   body_with_placeholder="$placeholder"
@@ -117,29 +112,14 @@ comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/com
 comment_id="${comment_info%%$'\t'*}"
 comment_url="${comment_info#*$'\t'}"
 
-python_bin=""
-if command -v python3 >/dev/null 2>&1; then
-  python_bin="python3"
-elif command -v python >/dev/null 2>&1; then
-  python_bin="python"
-else
-  echo "python (for URL-encoding the filename) is required." >&2
-  exit 1
-fi
-
-encoded_name="$($python_bin - <<'PY' "$image"
-import sys
-from urllib.parse import quote
-print(quote(sys.argv[1].split('/')[-1]))
-PY
-)"
+upload_name="$(basename "$image")"
 
 auth_token="$(gh auth token -h "$host")"
 upload_url="$(gh api -X POST \
   -H "Authorization: token $auth_token" \
-  -H "Content-Type: $content_type" \
-  --input "$image" \
-  "https://$uploads_host/repos/$repo/issues/$issue/comments/$comment_id/attachments?name=$encoded_name" \
+  -F "file=@$image" \
+  -F "name=$upload_name" \
+  "https://$uploads_host/repos/$repo/issues/$issue/comments/$comment_id/attachments" \
   --jq .url)"
 
 img_tag="<img src=\"$upload_url\" width=\"$width\" alt=\"$alt\">"
