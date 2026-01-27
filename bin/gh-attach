@@ -3,23 +3,37 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: gh-attach --issue <number> --image <path> [options]
+Usage: gh-attach --issue <number> --image <path> [--image <path>...] [options]
 
 Options:
   --repo <owner/repo>   Target repository (default: current repo)
   --issue <number>      Issue or PR number (required)
-  --image <path>        Image file path to upload (required)
+  --image <path>        Image file path to upload (required, can be repeated)
   --width <px>          Image width in pixels (default: 500)
   --body <text>         Comment body text
   --body-file <path>    Read comment body from file
-  --alt <text>          Alt text for the image (default: filename)
   --host <host>         GitHub host (auto-detected)
-  --uploads-host <host> Uploads host (default: uploads.<host>)
+  --headed              Run browser in headed mode (visible)
   -h, --help            Show help
 
+Placeholders:
+  <!-- gh-attach:IMAGE -->      Single image (replaced by first image)
+  <!-- gh-attach:IMAGE:1 -->    Numbered placeholder for multiple images
+  <!-- gh-attach:IMAGE:2 -->    (numbers start from 1)
+
+Requirements:
+  - gh CLI (authenticated)
+  - playwright-cli (npm install -g @playwright/mcp)
+  - Logged into GitHub in the browser session
+
 Examples:
-  gh-attach --issue 123 --image ./e2e.png --width 500 --body-file report.md
-  gh-attach --repo acme/app --issue 12 --image ./shot.png --host github.myco.com
+  # Single image
+  gh-attach --issue 123 --image ./e2e.png --body 'Result: <!-- gh-attach:IMAGE -->'
+
+  # Multiple images
+  gh-attach --issue 123 --image ./before.png --image ./after.png \
+    --body 'Before: <!-- gh-attach:IMAGE:1 -->
+After: <!-- gh-attach:IMAGE:2 -->'
 USAGE
 }
 
@@ -28,27 +42,30 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v playwright-cli >/dev/null 2>&1; then
+  echo "playwright-cli is required. Install with: npm install -g @playwright/mcp" >&2
+  exit 1
+fi
+
 repo=""
 issue=""
-image=""
+images=()
 width="500"
 body=""
 body_file=""
 host=""
-uploads_host=""
-alt=""
+headed=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo="$2"; shift 2;;
     --issue) issue="$2"; shift 2;;
-    --image) image="$2"; shift 2;;
+    --image) images+=("$2"); shift 2;;
     --width) width="$2"; shift 2;;
     --body) body="$2"; shift 2;;
     --body-file) body_file="$2"; shift 2;;
-    --alt) alt="$2"; shift 2;;
     --host) host="$2"; shift 2;;
-    --uploads-host) uploads_host="$2"; shift 2;;
+    --headed) headed="--headed"; shift;;
     -h|--help) usage; exit 0;;
     *)
       echo "Unknown argument: $1" >&2
@@ -58,8 +75,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$issue" || -z "$image" ]]; then
-  echo "--issue and --image are required." >&2
+if [[ -z "$issue" || ${#images[@]} -eq 0 ]]; then
+  echo "--issue and at least one --image are required." >&2
   usage
   exit 1
 fi
@@ -69,10 +86,12 @@ if [[ -n "$body" && -n "$body_file" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$image" ]]; then
-  echo "Image not found: $image" >&2
-  exit 1
-fi
+for img in "${images[@]}"; do
+  if [[ ! -f "$img" ]]; then
+    echo "Image not found: $img" >&2
+    exit 1
+  fi
+done
 
 if [[ -n "$body_file" ]]; then
   body="$(cat "$body_file")"
@@ -91,54 +110,124 @@ if [[ -z "$host" ]]; then
   host="$(echo "$repo_url" | sed -E 's#https?://([^/]+)/.*#\1#')"
 fi
 
-if [[ -z "$uploads_host" ]]; then
-  uploads_host="uploads.$host"
+# Build placeholder string for body
+placeholder_single="<!-- gh-attach:IMAGE -->"
+body_with_placeholder="$body"
+
+# Check if body has any placeholders
+has_placeholder=false
+if [[ "$body" == *"$placeholder_single"* ]]; then
+  has_placeholder=true
+fi
+for i in $(seq 1 ${#images[@]}); do
+  if [[ "$body" == *"<!-- gh-attach:IMAGE:$i -->"* ]]; then
+    has_placeholder=true
+  fi
+done
+
+# If no placeholders, add them at the end
+if [[ "$has_placeholder" == "false" ]]; then
+  if [[ ${#images[@]} -eq 1 ]]; then
+    if [[ -z "$body" ]]; then
+      body_with_placeholder="$placeholder_single"
+    else
+      body_with_placeholder="${body}"$'\n\n'"$placeholder_single"
+    fi
+  else
+    placeholders=""
+    for i in $(seq 1 ${#images[@]}); do
+      placeholders+="<!-- gh-attach:IMAGE:$i -->"$'\n'
+    done
+    if [[ -z "$body" ]]; then
+      body_with_placeholder="$placeholders"
+    else
+      body_with_placeholder="${body}"$'\n\n'"$placeholders"
+    fi
+  fi
 fi
 
-if [[ -z "$alt" ]]; then
-  alt="$(basename "$image")"
-fi
-
-placeholder="<!-- gh-attach:IMAGE -->"
-if [[ -z "$body" ]]; then
-  body_with_placeholder="$placeholder"
-elif [[ "$body" == *"$placeholder"* ]]; then
-  body_with_placeholder="$body"
-else
-  body_with_placeholder="${body}"$'\n\n'"$placeholder"
-fi
-
+# Create comment with placeholders
 comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '"\(.id)\t\(.html_url)"')"
 comment_id="${comment_info%%$'\t'*}"
 comment_url="${comment_info#*$'\t'}"
 
-upload_name="$(basename "$image")"
+# Use playwright-cli to upload images via browser automation
+issue_url="https://$host/$repo/issues/$issue"
 
-auth_token="$(gh auth token -h "$host")"
-python_bin=""
-if command -v python3 >/dev/null 2>&1; then
-  python_bin="python3"
-elif command -v python >/dev/null 2>&1; then
-  python_bin="python"
-else
-  echo "python (for parsing JSON) is required." >&2
-  exit 1
+# Start browser session and navigate to issue page
+# shellcheck disable=SC2086
+playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+
+# Scroll down to find the comment form
+playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
+sleep 1
+
+# Upload each image and collect URLs
+upload_urls=()
+for img in "${images[@]}"; do
+  # Find and click the file upload button
+  snapshot_output=$(playwright-cli snapshot 2>&1)
+  snapshot_file=$(echo "$snapshot_output" | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
+  upload_button_ref=$(grep -o 'button "Paste, drop, or click to add files" \[ref=[^]]*\]' "$snapshot_file" 2>/dev/null | head -1 | grep -o 'ref=[^]]*' | cut -d= -f2)
+
+  if [[ -z "$upload_button_ref" ]]; then
+    echo "Could not find upload button. Make sure you are logged into GitHub." >&2
+    playwright-cli session-stop >/dev/null 2>&1
+    exit 1
+  fi
+
+  playwright-cli click "$upload_button_ref" >/dev/null 2>&1
+  sleep 0.5
+
+  # Upload the file
+  playwright-cli upload "$img" >/dev/null 2>&1
+  sleep 2
+
+  # Extract the uploaded image URL from the textbox
+  snapshot_file=$(playwright-cli snapshot 2>&1 | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
+  # Get all URLs and take the last one (most recently uploaded)
+  upload_url=$(grep -oE 'src="https://[^"]+/user-attachments/assets/[^"]*"' "$snapshot_file" 2>/dev/null | tail -1 | sed 's/src="//;s/"$//')
+
+  if [[ -z "$upload_url" ]]; then
+    echo "Failed to get upload URL for: $img" >&2
+    playwright-cli session-stop >/dev/null 2>&1
+    exit 1
+  fi
+
+  upload_urls+=("$upload_url")
+
+  # Clear the textbox for next upload by selecting all and deleting
+  playwright-cli eval "document.activeElement.select && document.activeElement.select()" >/dev/null 2>&1
+  playwright-cli press "Backspace" >/dev/null 2>&1
+  sleep 0.5
+done
+
+# Stop the browser session
+playwright-cli session-stop >/dev/null 2>&1
+
+# Replace placeholders with image tags
+body_with_images="$body_with_placeholder"
+
+for i in "${!images[@]}"; do
+  img="${images[$i]}"
+  url="${upload_urls[$i]}"
+  alt="$(basename "$img")"
+  img_tag="<img src=\"$url\" width=\"$width\" alt=\"$alt\">"
+
+  # Replace numbered placeholder first
+  num=$((i + 1))
+  body_with_images="${body_with_images//<!-- gh-attach:IMAGE:$num -->/$img_tag}"
+done
+
+# Replace single placeholder with first image (for backward compatibility)
+if [[ ${#images[@]} -ge 1 ]]; then
+  first_url="${upload_urls[0]}"
+  first_alt="$(basename "${images[0]}")"
+  first_img_tag="<img src=\"$first_url\" width=\"$width\" alt=\"$first_alt\">"
+  body_with_images="${body_with_images//$placeholder_single/$first_img_tag}"
 fi
 
-upload_json="$(curl -sSf -X POST \
-  -H "Authorization: token $auth_token" \
-  -F "file=@$image" \
-  -F "name=$upload_name" \
-  "https://$uploads_host/repos/$repo/issues/$issue/comments/$comment_id/attachments")"
-upload_url="$($python_bin - <<'PY' "$upload_json"
-import json, sys
-print(json.loads(sys.argv[1])["url"])
-PY
-)"
-
-img_tag="<img src=\"$upload_url\" width=\"$width\" alt=\"$alt\">"
-body_with_image="${body_with_placeholder//$placeholder/$img_tag}"
-
-gh api --hostname "$host" -X PATCH "repos/$repo/issues/comments/$comment_id" -f body="$body_with_image" >/dev/null
+# Update the comment
+gh api --hostname "$host" -X PATCH "repos/$repo/issues/comments/$comment_id" -f body="$body_with_images" >/dev/null
 
 echo "Comment updated: $comment_url"
