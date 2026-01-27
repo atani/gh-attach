@@ -113,7 +113,7 @@ else
   body_with_placeholder="${body}"$'\n\n'"$placeholder"
 fi
 
-comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '.id + "\t" + .html_url')"
+comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '.id|tostring + "\t" + .html_url')"
 comment_id="${comment_info%%$'\t'*}"
 comment_url="${comment_info#*$'\t'}"
 
