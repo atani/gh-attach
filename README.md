@@ -14,10 +14,10 @@ Works with both GitHub.com and GitHub Enterprise.
 ### Homebrew (recommended)
 
 ```bash
-brew tap atani/tap  # 初回のみ
+brew tap atani/tap  # first time only
 brew install gh-attach
 
-# 初回実行: ブラウザでGitHubにログイン
+# First run: login to GitHub in browser
 gh-attach --issue 1 --image ./test.png --headed
 ```
 
