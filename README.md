@@ -14,10 +14,10 @@ Works with both GitHub.com and GitHub Enterprise.
 ### Homebrew (recommended)
 
 ```bash
-# Install (also installs gh, node, playwright-cli)
-brew install atani/tap/gh-attach
+brew tap atani/tap  # 初回のみ
+brew install gh-attach
 
-# First run: login to GitHub in browser (one time only)
+# 初回実行: ブラウザでGitHubにログイン
 gh-attach --issue 1 --image ./test.png --headed
 ```
 
