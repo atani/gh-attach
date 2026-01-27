@@ -18,6 +18,17 @@ ln -s /Users/akira/src/github.com/atani/gh-attach/bin/gh-attach /usr/local/bin/g
 gh-attach --issue 123 --image ./e2e.png --width 500 --body-file report.md
 ```
 
+## Insertion position
+
+To control where the image is inserted, put the placeholder in your comment body:
+
+```
+<!-- gh-attach:IMAGE -->
+```
+
+If the placeholder is present, it will be replaced with the `<img>` tag.
+If not present, the image is appended to the end of the comment.
+
 Options:
 
 - `--repo owner/repo` (default: current repo)
@@ -34,3 +45,4 @@ Options:
 
 - PR comments are treated as issue comments, so use the PR number.
 - The image is inserted as HTML: `<img src="..." width="500" alt="...">`.
+- Workflow is: create comment -> upload image -> update comment.

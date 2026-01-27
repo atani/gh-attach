@@ -107,6 +107,8 @@ fi
 placeholder="<!-- gh-attach:IMAGE -->"
 if [[ -z "$body" ]]; then
   body_with_placeholder="$placeholder"
+elif [[ "$body" == *"$placeholder"* ]]; then
+  body_with_placeholder="$body"
 else
   body_with_placeholder="${body}"$'\n\n'"$placeholder"
 fi
