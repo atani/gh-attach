@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.5.0"
+VERSION="0.5.1"
 
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -228,6 +228,29 @@ else
   # Start browser session and navigate to issue page
   # shellcheck disable=SC2086
   playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+
+  # Wait for GitHub page to load (handle SSO/login redirects)
+  echo "Waiting for GitHub page to load..." >&2
+  max_wait=120
+  waited=0
+  while [[ $waited -lt $max_wait ]]; do
+    current_url=$(playwright-cli eval "window.location.href" 2>/dev/null || echo "")
+    if [[ "$current_url" == *"$host"* && "$current_url" == *"/issues/"* ]]; then
+      echo "GitHub page loaded." >&2
+      break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    if [[ $((waited % 10)) -eq 0 ]]; then
+      echo "Still waiting for login... ($waited seconds)" >&2
+    fi
+  done
+
+  if [[ $waited -ge $max_wait ]]; then
+    echo "Timeout waiting for GitHub page. Please make sure you are logged in." >&2
+    playwright-cli session-stop >/dev/null 2>&1
+    exit 1
+  fi
 
   # Scroll down to find the comment form
   playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
