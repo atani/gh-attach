@@ -30,7 +30,7 @@ Placeholders:
 
 Requirements:
   - gh CLI (authenticated)
-  - playwright-cli (npm install -g @playwright/mcp)
+  - playwright-cli (npm install -g @playwright/cli)
   - Logged into GitHub in the browser session
 
 Examples:
