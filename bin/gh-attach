@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.5.1"
+VERSION="0.5.2"
 
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ Options:
   --repo <owner/repo>   Target repository (default: current repo)
   --issue <number>      Issue or PR number (required)
   --image <path>        Image file path to upload (required, can be repeated)
-  --width <px>          Image width in pixels (default: 500)
+  --width <px>          Image width in pixels (default: 800)
   --body <text>         Comment body text
   --body-file <path>    Read comment body from file
   --host <host>         GitHub host (auto-detected)
@@ -63,7 +63,7 @@ fi
 repo=""
 issue=""
 images=()
-width="500"
+width="800"
 body=""
 body_file=""
 host=""
