@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Use bundled playwright-cli if available (Homebrew installation)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIBEXEC_BIN="${SCRIPT_DIR}/../libexec/node_modules/.bin"
+if [[ -d "$LIBEXEC_BIN" ]]; then
+  export PATH="$LIBEXEC_BIN:$PATH"
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: gh-attach --issue <number> --image <path> [--image <path>...] [options]
