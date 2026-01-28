@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,38 +22,41 @@ Options:
   --body <text>         Comment body text
   --body-file <path>    Read comment body from file
   --host <host>         GitHub host (auto-detected)
-  --headed              Run browser in headed mode (visible)
+  --release             Use GitHub Releases for upload (no browser needed)
+  --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
+  --headed              Run browser in headed mode (visible, browser mode only)
   -h, --help            Show help
   -v, --version         Show version
+
+Upload Modes:
+  Browser mode (default):
+    Uses playwright-cli to upload via browser automation.
+    Requires: playwright-cli, browser login
+
+  Release mode (--release):
+    Uses GitHub Releases API to upload images.
+    Requires: gh CLI authentication only (no browser needed)
+    Note: Creates a release tag in your repository
 
 Placeholders:
   <!-- gh-attach:IMAGE -->      Single image (replaced by first image)
   <!-- gh-attach:IMAGE:1 -->    Numbered placeholder for multiple images
   <!-- gh-attach:IMAGE:2 -->    (numbers start from 1)
 
-Requirements:
-  - gh CLI (authenticated)
-  - playwright-cli (npm install -g @playwright/cli)
-  - Logged into GitHub in the browser session
-
 Examples:
-  # Single image
-  gh-attach --issue 123 --image ./e2e.png --body 'Result: <!-- gh-attach:IMAGE -->'
+  # Browser mode (default)
+  gh-attach --issue 123 --image ./screenshot.png
 
-  # Multiple images
-  gh-attach --issue 123 --image ./before.png --image ./after.png \
-    --body 'Before: <!-- gh-attach:IMAGE:1 -->
-After: <!-- gh-attach:IMAGE:2 -->'
+  # Release mode (no browser, CLI auth only)
+  gh-attach --issue 123 --image ./screenshot.png --release
+
+  # With custom body
+  gh-attach --issue 123 --image ./e2e.png --body 'Result: <!-- gh-attach:IMAGE -->'
 USAGE
 }
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI is required." >&2
-  exit 1
-fi
-
-if ! command -v playwright-cli >/dev/null 2>&1; then
-  echo "playwright-cli is required. Install with: npm install -g @playwright/cli" >&2
   exit 1
 fi
 
@@ -65,6 +68,8 @@ body=""
 body_file=""
 host=""
 headed=""
+use_release=""
+release_tag="gh-attach-assets"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     --body) body="$2"; shift 2;;
     --body-file) body_file="$2"; shift 2;;
     --host) host="$2"; shift 2;;
+    --release) use_release="true"; shift;;
+    --release-tag) release_tag="$2"; shift 2;;
     --headed) headed="--headed"; shift;;
     -h|--help) usage; exit 0;;
     -v|--version) echo "gh-attach $VERSION"; exit 0;;
@@ -85,6 +92,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Check playwright-cli only for browser mode
+if [[ -z "$use_release" ]]; then
+  if ! command -v playwright-cli >/dev/null 2>&1; then
+    echo "playwright-cli is required for browser mode. Install with: npm install -g @playwright/cli" >&2
+    echo "Or use --release flag for CLI-only mode (no browser needed)." >&2
+    exit 1
+  fi
+fi
 
 if [[ -z "$issue" || ${#images[@]} -eq 0 ]]; then
   echo "--issue and at least one --image are required." >&2
@@ -162,59 +178,103 @@ comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/com
 comment_id="${comment_info%%$'\t'*}"
 comment_url="${comment_info#*$'\t'}"
 
-# Use playwright-cli to upload images via browser automation
-issue_url="https://$host/$repo/issues/$issue"
-
-# Start browser session and navigate to issue page
-# shellcheck disable=SC2086
-playwright-cli open "$issue_url" $headed >/dev/null 2>&1
-
-# Scroll down to find the comment form
-playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
-sleep 1
-
-# Upload each image and collect URLs
+# Upload images
 upload_urls=()
-for img in "${images[@]}"; do
-  # Find and click the file upload button
-  snapshot_output=$(playwright-cli snapshot 2>&1)
-  snapshot_file=$(echo "$snapshot_output" | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
-  upload_button_ref=$(grep -o 'button "Paste, drop, or click to add files" \[ref=[^]]*\]' "$snapshot_file" 2>/dev/null | head -1 | grep -o 'ref=[^]]*' | cut -d= -f2)
 
-  if [[ -z "$upload_button_ref" ]]; then
-    echo "Could not find upload button. Make sure you are logged into GitHub." >&2
-    playwright-cli session-stop >/dev/null 2>&1
-    exit 1
+if [[ -n "$use_release" ]]; then
+  # Release mode: use gh release upload
+
+  # Build gh command with hostname if needed
+  gh_repo_flag="--repo $repo"
+  if [[ "$host" != "github.com" ]]; then
+    gh_repo_flag="--repo $host/$repo"
   fi
 
-  playwright-cli click "$upload_button_ref" >/dev/null 2>&1
-  sleep 0.5
-
-  # Upload the file
-  playwright-cli upload "$img" >/dev/null 2>&1
-  sleep 2
-
-  # Extract the uploaded image URL from the textbox
-  snapshot_file=$(playwright-cli snapshot 2>&1 | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
-  # Get all URLs and take the last one (most recently uploaded)
-  upload_url=$(grep -oE 'src="https://[^"]+/user-attachments/assets/[^"]*"' "$snapshot_file" 2>/dev/null | tail -1 | sed 's/src="//;s/"$//')
-
-  if [[ -z "$upload_url" ]]; then
-    echo "Failed to get upload URL for: $img" >&2
-    playwright-cli session-stop >/dev/null 2>&1
-    exit 1
+  # Check if release exists, create if not
+  # shellcheck disable=SC2086
+  if ! gh release view "$release_tag" $gh_repo_flag >/dev/null 2>&1; then
+    echo "Creating release '$release_tag' for image uploads..." >&2
+    # shellcheck disable=SC2086
+    gh release create "$release_tag" $gh_repo_flag --notes "Assets uploaded by gh-attach" --title "gh-attach assets" >/dev/null 2>&1
   fi
 
-  upload_urls+=("$upload_url")
+  # Upload each image with timestamp to avoid conflicts
+  timestamp=$(date +%Y%m%d%H%M%S)
+  for img in "${images[@]}"; do
+    basename_img="$(basename "$img")"
+    ext="${basename_img##*.}"
+    name="${basename_img%.*}"
+    unique_name="${name}-${timestamp}-$$.${ext}"
 
-  # Clear the textbox for next upload by selecting all and deleting
-  playwright-cli eval "document.activeElement.select && document.activeElement.select()" >/dev/null 2>&1
-  playwright-cli press "Backspace" >/dev/null 2>&1
-  sleep 0.5
-done
+    # Upload to release
+    # shellcheck disable=SC2086
+    gh release upload "$release_tag" "$img" --clobber $gh_repo_flag >/dev/null 2>&1 || {
+      # If clobber fails, try with unique name
+      cp "$img" "/tmp/$unique_name"
+      # shellcheck disable=SC2086
+      gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
+      rm -f "/tmp/$unique_name"
+      basename_img="$unique_name"
+    }
 
-# Stop the browser session
-playwright-cli session-stop >/dev/null 2>&1
+    # Build download URL
+    upload_url="https://$host/$repo/releases/download/$release_tag/$basename_img"
+    upload_urls+=("$upload_url")
+  done
+else
+  # Browser mode: use playwright-cli
+  issue_url="https://$host/$repo/issues/$issue"
+
+  # Start browser session and navigate to issue page
+  # shellcheck disable=SC2086
+  playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+
+  # Scroll down to find the comment form
+  playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
+  sleep 1
+
+  # Upload each image and collect URLs
+  for img in "${images[@]}"; do
+    # Find and click the file upload button
+    snapshot_output=$(playwright-cli snapshot 2>&1)
+    snapshot_file=$(echo "$snapshot_output" | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
+    upload_button_ref=$(grep -o 'button "Paste, drop, or click to add files" \[ref=[^]]*\]' "$snapshot_file" 2>/dev/null | head -1 | grep -o 'ref=[^]]*' | cut -d= -f2)
+
+    if [[ -z "$upload_button_ref" ]]; then
+      echo "Could not find upload button. Make sure you are logged into GitHub." >&2
+      playwright-cli session-stop >/dev/null 2>&1
+      exit 1
+    fi
+
+    playwright-cli click "$upload_button_ref" >/dev/null 2>&1
+    sleep 0.5
+
+    # Upload the file
+    playwright-cli upload "$img" >/dev/null 2>&1
+    sleep 2
+
+    # Extract the uploaded image URL from the textbox
+    snapshot_file=$(playwright-cli snapshot 2>&1 | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
+    # Get all URLs and take the last one (most recently uploaded)
+    upload_url=$(grep -oE 'src="https://[^"]+/user-attachments/assets/[^"]*"' "$snapshot_file" 2>/dev/null | tail -1 | sed 's/src="//;s/"$//')
+
+    if [[ -z "$upload_url" ]]; then
+      echo "Failed to get upload URL for: $img" >&2
+      playwright-cli session-stop >/dev/null 2>&1
+      exit 1
+    fi
+
+    upload_urls+=("$upload_url")
+
+    # Clear the textbox for next upload by selecting all and deleting
+    playwright-cli eval "document.activeElement.select && document.activeElement.select()" >/dev/null 2>&1
+    playwright-cli press "Backspace" >/dev/null 2>&1
+    sleep 0.5
+  done
+
+  # Stop the browser session
+  playwright-cli session-stop >/dev/null 2>&1
+fi
 
 # Replace placeholders with image tags
 body_with_images="$body_with_placeholder"
