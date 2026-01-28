@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+VERSION="0.4.0"
+
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBEXEC_BIN="${SCRIPT_DIR}/../libexec/node_modules/.bin"
@@ -22,6 +24,7 @@ Options:
   --host <host>         GitHub host (auto-detected)
   --headed              Run browser in headed mode (visible)
   -h, --help            Show help
+  -v, --version         Show version
 
 Placeholders:
   <!-- gh-attach:IMAGE -->      Single image (replaced by first image)
@@ -50,7 +53,7 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 if ! command -v playwright-cli >/dev/null 2>&1; then
-  echo "playwright-cli is required. Install with: npm install -g @playwright/mcp" >&2
+  echo "playwright-cli is required. Install with: npm install -g @playwright/cli" >&2
   exit 1
 fi
 
@@ -74,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --host) host="$2"; shift 2;;
     --headed) headed="--headed"; shift;;
     -h|--help) usage; exit 0;;
+    -v|--version) echo "gh-attach $VERSION"; exit 0;;
     *)
       echo "Unknown argument: $1" >&2
       usage
