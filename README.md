@@ -4,6 +4,8 @@ Upload images to GitHub Issue/PR comments and insert them with fixed width.
 
 Works with both GitHub.com and GitHub Enterprise.
 
+![demo](demo.gif)
+
 ## Requirements
 
 - [gh CLI](https://cli.github.com/) (authenticated)
