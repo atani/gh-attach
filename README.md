@@ -7,7 +7,7 @@ Works with both GitHub.com and GitHub Enterprise.
 ## Requirements
 
 - [gh CLI](https://cli.github.com/) (authenticated)
-- [playwright-cli](https://github.com/microsoft/playwright-mcp) (for image upload)
+- [playwright-cli](https://github.com/microsoft/playwright-mcp) (browser mode only, not needed for `--release` mode)
 
 ## Install
 
@@ -19,6 +19,15 @@ brew install gh-attach
 
 # First run: login to GitHub in browser
 gh-attach --issue 1 --image ./test.png --headed
+```
+
+### gh extension
+
+```bash
+gh extension install atani/gh-attach
+
+# Use as: gh attach
+gh attach --issue 123 --image ./screenshot.png
 ```
 
 ### Manual
@@ -77,6 +86,12 @@ gh-attach --issue 123 \
 After: <!-- gh-attach:IMAGE:2 -->'
 ```
 
+### Release mode (no browser needed)
+
+```bash
+gh-attach --issue 123 --image ./screenshot.png --release
+```
+
 ### From file
 
 ```bash
@@ -87,27 +102,29 @@ gh-attach --issue 123 --image ./result.png --body-file report.md
 
 Control where images are inserted in the comment body:
 
-| Placeholder | Description |
-|-------------|-------------|
-| `<!-- gh-attach:IMAGE -->` | Single image (or first image) |
-| `<!-- gh-attach:IMAGE:1 -->` | First image (numbered) |
-| `<!-- gh-attach:IMAGE:2 -->` | Second image |
-| `<!-- gh-attach:IMAGE:N -->` | N-th image |
+| Placeholder                  | Description                   |
+| ---------------------------- | ----------------------------- |
+| `<!-- gh-attach:IMAGE -->`   | Single image (or first image) |
+| `<!-- gh-attach:IMAGE:1 -->` | First image (numbered)        |
+| `<!-- gh-attach:IMAGE:2 -->` | Second image                  |
+| `<!-- gh-attach:IMAGE:N -->` | N-th image                    |
 
 If no placeholder is present, images are appended to the end.
 
 ## Options
 
-| Option | Required | Default | Description |
-|--------|----------|---------|-------------|
-| `--issue <number>` | Yes | - | Issue or PR number |
-| `--image <path>` | Yes | - | Image file (can be repeated) |
-| `--repo <owner/repo>` | No | current repo | Target repository |
-| `--width <px>` | No | 500 | Image width in pixels |
-| `--body <text>` | No | - | Comment body text |
-| `--body-file <path>` | No | - | Read body from file |
-| `--host <host>` | No | auto-detected | GitHub host (for Enterprise) |
-| `--headed` | No | - | Show browser window |
+| Option                | Required | Default          | Description                                 |
+| --------------------- | -------- | ---------------- | ------------------------------------------- |
+| `--issue <number>`    | Yes      | -                | Issue or PR number                          |
+| `--image <path>`      | Yes      | -                | Image file (can be repeated)                |
+| `--repo <owner/repo>` | No       | current repo     | Target repository                           |
+| `--width <px>`        | No       | 800              | Image width in pixels                       |
+| `--body <text>`       | No       | -                | Comment body text                           |
+| `--body-file <path>`  | No       | -                | Read body from file                         |
+| `--host <host>`       | No       | auto-detected    | GitHub host (for Enterprise)                |
+| `--release`           | No       | -                | Use GitHub Releases API (no browser needed) |
+| `--release-tag <tag>` | No       | gh-attach-assets | Release tag for uploads                     |
+| `--headed`            | No       | -                | Show browser window (browser mode only)     |
 
 ## How it works
 
@@ -120,6 +137,6 @@ If no placeholder is present, images are appended to the end.
 ## Notes
 
 - PR comments use the same API as issue comments (use PR number)
-- Images are inserted as HTML: `<img src="..." width="500" alt="...">`
+- Images are inserted as HTML: `<img src="..." width="800" alt="...">`
 - Browser session is persisted, so login is only needed once
 - Use `--headed` to debug or when login is required

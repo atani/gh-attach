@@ -137,6 +137,9 @@ if [[ -z "$host" ]]; then
   host="$(echo "$repo_url" | sed -E 's#https?://([^/]+)/.*#\1#')"
 fi
 
+# Normalize escaped HTML comments (e.g. <\!-- from bash history expansion)
+body="${body//<\\!--/<!--}"
+
 # Build placeholder string for body
 placeholder_single="<!-- gh-attach:IMAGE -->"
 body_with_placeholder="$body"
