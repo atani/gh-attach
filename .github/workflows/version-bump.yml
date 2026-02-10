@@ -58,7 +58,9 @@ jobs:
       - name: Get current version
         id: current
         run: |
-          CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # Only consider semver tags (v*.*.*), skip non-version tags like gh-attach-assets
+          CURRENT_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+          CURRENT_TAG="${CURRENT_TAG:-v0.0.0}"
           echo "tag=${CURRENT_TAG}" >> $GITHUB_OUTPUT
 
       - name: Calculate next version
