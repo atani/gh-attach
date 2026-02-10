@@ -26,6 +26,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       !startsWith(github.event.head_commit.author.name, 'dependabot')
+    outputs:
+      version: ${{ steps.next.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -82,3 +84,67 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.next.outputs.version }}" -m "Release ${{ steps.next.outputs.version }}"
           git push origin "${{ steps.next.outputs.version }}"
+
+  release:
+    name: Create Release
+    needs: bump
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.bump.outputs.version }}
+          fetch-depth: 0
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: [bump, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release info
+        id: release
+        run: |
+          VERSION="${{ needs.bump.outputs.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Download tarball and calculate SHA256
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${VERSION}.tar.gz"
+          SHA256=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v6
+        with:
+          repository: atani/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          SHA256="${{ steps.release.outputs.sha256 }}"
+          URL="${{ steps.release.outputs.url }}"
+
+          # Update formula file
+          sed -i "s|url \".*\"|url \"$URL\"|" Formula/gh-attach.rb
+          sed -i "s|sha256 \".*\"|sha256 \"$SHA256\"|" Formula/gh-attach.rb
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/gh-attach.rb
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "gh-attach ${VERSION}"
+          git push
