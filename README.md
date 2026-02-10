@@ -7,7 +7,8 @@ Works with both GitHub.com and GitHub Enterprise.
 ## Requirements
 
 - [gh CLI](https://cli.github.com/) (authenticated)
-- [playwright-cli](https://github.com/microsoft/playwright-mcp) (browser mode only, not needed for `--release` mode)
+- [playwright-cli](https://github.com/microsoft/playwright-mcp) (browser/direct mode, not needed for `--release` mode)
+- [jq](https://jqlang.github.io/jq/) (direct mode only)
 
 ## Install
 
@@ -92,6 +93,23 @@ After: <!-- gh-attach:IMAGE:2 -->'
 gh-attach --issue 123 --image ./screenshot.png --release
 ```
 
+### Direct mode (GHE)
+
+For hosts configured in `~/.config/gh-attach/config`, direct mode is auto-enabled. This uploads via the upload policies API + curl, producing `user-attachments` URLs without creating release artifacts.
+
+```bash
+# ~/.config/gh-attach/config
+# direct_hosts=your-ghe-host.com
+
+gh-attach --issue 123 --image ./screenshot.png --host your-ghe-host.com --repo owner/repo
+```
+
+Use `--browser` to override and force browser mode:
+
+```bash
+gh-attach --issue 123 --image ./screenshot.png --browser
+```
+
 ### From file
 
 ```bash
@@ -124,15 +142,38 @@ If no placeholder is present, images are appended to the end.
 | `--host <host>`       | No       | auto-detected    | GitHub host (for Enterprise)                |
 | `--release`           | No       | -                | Use GitHub Releases API (no browser needed) |
 | `--release-tag <tag>` | No       | gh-attach-assets | Release tag for uploads                     |
-| `--headed`            | No       | -                | Show browser window (browser mode only)     |
+| `--browser`           | No       | -                | Force browser mode (skip direct upload)     |
+| `--headed`            | No       | -                | Show browser window                         |
 
-## How it works
+## Upload modes
+
+### Browser mode (default)
 
 1. Create a comment with placeholder(s)
 2. Open GitHub in browser via playwright-cli
-3. Upload image(s) using GitHub's native upload
+3. Upload image(s) using GitHub's native upload UI
 4. Extract the uploaded URL(s)
 5. Update the comment with `<img>` tags
+
+### Release mode (`--release`)
+
+1. Create a comment with placeholder(s)
+2. Upload image(s) to a GitHub Release via `gh release upload`
+3. Update the comment with release download URLs
+
+### Direct mode (auto-detected)
+
+1. Create a comment with placeholder(s)
+2. Open GitHub in browser via playwright-cli (for authentication)
+3. Trigger the file-attachment component to obtain upload policies
+4. Upload file(s) via curl to the media server
+5. Update the comment with `user-attachments` URLs
+
+Direct mode is auto-enabled for hosts listed in `~/.config/gh-attach/config`:
+
+```
+direct_hosts=host1.example.com,host2.example.com
+```
 
 ## Notes
 

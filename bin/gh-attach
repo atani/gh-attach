@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.5.2"
+VERSION="0.6.0"
 
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +24,8 @@ Options:
   --host <host>         GitHub host (auto-detected)
   --release             Use GitHub Releases for upload (no browser needed)
   --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
-  --headed              Run browser in headed mode (visible, browser mode only)
+  --browser             Force browser mode (skip direct upload)
+  --headed              Run browser in headed mode (visible)
   -h, --help            Show help
   -v, --version         Show version
 
@@ -38,6 +39,16 @@ Upload Modes:
     Requires: gh CLI authentication only (no browser needed)
     Note: Creates a release tag in your repository
 
+  Direct mode (auto-detected):
+    Uses upload policies API via browser auth + curl upload.
+    Produces user-attachments URLs without release artifacts.
+    Auto-enabled for hosts listed in ~/.config/gh-attach/config
+    Use --browser to override and force browser mode.
+
+Configuration:
+  ~/.config/gh-attach/config
+    direct_hosts=host1,host2   Hosts that use direct upload mode
+
 Placeholders:
   <!-- gh-attach:IMAGE -->      Single image (replaced by first image)
   <!-- gh-attach:IMAGE:1 -->    Numbered placeholder for multiple images
@@ -49,6 +60,9 @@ Examples:
 
   # Release mode (no browser, CLI auth only)
   gh-attach --issue 123 --image ./screenshot.png --release
+
+  # Force browser mode (override direct mode)
+  gh-attach --issue 123 --image ./screenshot.png --browser
 
   # With custom body
   gh-attach --issue 123 --image ./e2e.png --body 'Result: <!-- gh-attach:IMAGE -->'
@@ -69,6 +83,7 @@ body_file=""
 host=""
 headed=""
 use_release=""
+use_browser=""
 release_tag="gh-attach-assets"
 
 while [[ $# -gt 0 ]]; do
@@ -82,6 +97,7 @@ while [[ $# -gt 0 ]]; do
     --host) host="$2"; shift 2;;
     --release) use_release="true"; shift;;
     --release-tag) release_tag="$2"; shift 2;;
+    --browser) use_browser="true"; shift;;
     --headed) headed="--headed"; shift;;
     -h|--help) usage; exit 0;;
     -v|--version) echo "gh-attach $VERSION"; exit 0;;
@@ -93,10 +109,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Check playwright-cli only for browser mode
+# Check playwright-cli for browser and direct modes
 if [[ -z "$use_release" ]]; then
   if ! command -v playwright-cli >/dev/null 2>&1; then
-    echo "playwright-cli is required for browser mode. Install with: npm install -g @playwright/cli" >&2
+    echo "playwright-cli is required for browser/direct mode. Install with: npm install -g @playwright/cli" >&2
     echo "Or use --release flag for CLI-only mode (no browser needed)." >&2
     exit 1
   fi
@@ -135,6 +151,33 @@ fi
 if [[ -z "$host" ]]; then
   repo_url="$(gh repo view "$repo" --json url -q .url)"
   host="$(echo "$repo_url" | sed -E 's#https?://([^/]+)/.*#\1#')"
+fi
+
+# Determine upload mode based on config
+use_direct=""
+if [[ -z "$use_release" && -z "$use_browser" ]]; then
+  config_file="${XDG_CONFIG_HOME:-$HOME/.config}/gh-attach/config"
+  if [[ -f "$config_file" ]]; then
+    direct_hosts=""
+    while IFS= read -r line; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -z "$line" ]] && continue
+      if [[ "$line" == direct_hosts=* ]]; then
+        direct_hosts="${line#direct_hosts=}"
+      fi
+    done < "$config_file"
+    IFS=',' read -ra hosts_array <<< "$direct_hosts"
+    for dhost in "${hosts_array[@]}"; do
+      dhost="${dhost#"${dhost%%[![:space:]]*}"}"
+      dhost="${dhost%"${dhost##*[![:space:]]}"}"
+      if [[ "$host" == "$dhost" ]]; then
+        use_direct="true"
+        break
+      fi
+    done
+  fi
 fi
 
 # Normalize escaped HTML comments (e.g. <\!-- from bash history expansion)
@@ -224,6 +267,147 @@ if [[ -n "$use_release" ]]; then
     upload_url="https://$host/$repo/releases/download/$release_tag/$basename_img"
     upload_urls+=("$upload_url")
   done
+elif [[ -n "$use_direct" ]]; then
+  # Direct mode: policy fetch via file-attachment component + file upload via curl
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required for direct upload mode." >&2
+    exit 1
+  fi
+
+  # Navigate to issue/PR page (need file-attachment component for policy fetch)
+  issue_url="https://$host/$repo/issues/$issue"
+  # shellcheck disable=SC2086
+  playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+
+  # Wait for page to load (handle SSO/login redirects)
+  echo "Waiting for page to load..." >&2
+  max_wait=120
+  waited=0
+  while [[ $waited -lt $max_wait ]]; do
+    current_url=$(playwright-cli eval "window.location.href" 2>/dev/null || echo "")
+    if [[ "$current_url" == *"$host"* && "$current_url" != *"/login"* && "$current_url" != *"/sso"* ]]; then
+      echo "Page loaded." >&2
+      break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    if [[ $((waited % 10)) -eq 0 ]]; then
+      echo "Still waiting for login... ($waited seconds)" >&2
+    fi
+  done
+
+  if [[ $waited -ge $max_wait ]]; then
+    echo "Timeout waiting for page load." >&2
+    playwright-cli session-stop >/dev/null 2>&1
+    exit 1
+  fi
+
+  # Upload each image: get policy via component, upload via curl
+  for img in "${images[@]}"; do
+    filename="$(basename "$img")"
+    filesize=$(wc -c < "$img" | tr -d ' ')
+    case "${filename##*.}" in
+      png) content_type="image/png";;
+      jpg|jpeg) content_type="image/jpeg";;
+      gif) content_type="image/gif";;
+      webp) content_type="image/webp";;
+      svg) content_type="image/svg+xml";;
+      *) content_type="application/octet-stream";;
+    esac
+    safe_filename="${filename//\'/\\\'}"
+
+    # Get upload policy by triggering file-attachment component with a fake file.
+    # Intercept the policy fetch response and block the actual XHR upload
+    # so the upload token stays valid for our curl upload.
+    js_code="async () => {
+      const buffer = new ArrayBuffer($filesize);
+      const file = new File([buffer], '${safe_filename}', {type: '${content_type}'});
+      const origFetch = window.fetch;
+      const origXhrOpen = XMLHttpRequest.prototype.open;
+      const origXhrSend = XMLHttpRequest.prototype.send;
+      let policyData = null;
+      window.fetch = async function(input, init) {
+        const url = typeof input === 'string' ? input : (input instanceof Request ? input.url : '');
+        if (url.includes('upload/policies')) {
+          const resp = await origFetch.apply(this, arguments);
+          policyData = await resp.clone().json();
+          return resp;
+        }
+        return origFetch.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this.__url = url;
+        return origXhrOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function(body) {
+        if (this.__url && !this.__url.startsWith(window.location.origin)) return;
+        return origXhrSend.apply(this, arguments);
+      };
+      const el = document.querySelector('file-attachment');
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.attach(dt);
+      await new Promise(r => setTimeout(r, 3000));
+      window.fetch = origFetch;
+      XMLHttpRequest.prototype.open = origXhrOpen;
+      XMLHttpRequest.prototype.send = origXhrSend;
+      return JSON.stringify(policyData);
+    }"
+
+    echo "Fetching upload policy: $filename..." >&2
+    eval_output=$(playwright-cli eval "$js_code" 2>/dev/null)
+    policy=$(echo "$eval_output" | sed -n '/^### Result$/{ n; p; q; }' | jq -r '.')
+
+    upload_url=$(echo "$policy" | jq -r '.upload_url')
+    upload_token=$(echo "$policy" | jq -r '.upload_authenticity_token')
+
+    if [[ -z "$upload_url" || "$upload_url" == "null" ]]; then
+      echo "Failed to get upload policy for: $img" >&2
+      playwright-cli session-stop >/dev/null 2>&1
+      exit 1
+    fi
+
+    # Build curl command with auth headers, form fields, and file
+    curl_cmd=(curl -s -X POST "$upload_url")
+
+    while IFS= read -r hkey; do
+      [[ -z "$hkey" ]] && continue
+      hval=$(echo "$policy" | jq -r ".header[\"$hkey\"]")
+      curl_cmd+=(-H "$hkey: $hval")
+    done < <(echo "$policy" | jq -r '.header // {} | keys[]' 2>/dev/null)
+
+    curl_cmd+=(-F "authenticity_token=$upload_token")
+
+    while IFS= read -r fkey; do
+      [[ -z "$fkey" ]] && continue
+      fval=$(echo "$policy" | jq -r ".form[\"$fkey\"]")
+      curl_cmd+=(-F "$fkey=$fval")
+    done < <(echo "$policy" | jq -r '.form // {} | keys[]' 2>/dev/null)
+
+    curl_cmd+=(-F "file=@$img;type=$content_type")
+
+    echo "Uploading: $filename..." >&2
+    upload_response=$("${curl_cmd[@]}" 2>/dev/null)
+    asset_href=$(echo "$upload_response" | jq -r '.href')
+
+    if [[ -z "$asset_href" || "$asset_href" == "null" ]]; then
+      echo "Failed to upload: $img" >&2
+      echo "Response: $upload_response" >&2
+      playwright-cli session-stop >/dev/null 2>&1
+      exit 1
+    fi
+
+    upload_urls+=("$asset_href")
+
+    # Reload page for fresh tokens before next upload
+    if [[ "$img" != "${images[-1]}" ]]; then
+      playwright-cli reload >/dev/null 2>&1
+      sleep 3
+    fi
+  done
+
+  # Stop browser
+  playwright-cli session-stop >/dev/null 2>&1
 else
   # Browser mode: use playwright-cli
   issue_url="https://$host/$repo/issues/$issue"
