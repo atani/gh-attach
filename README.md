@@ -1,8 +1,42 @@
 # gh-attach
 
+> **⚠️ This repository is archived.** [playwright-cli](https://github.com/microsoft/playwright-cli) can replace gh-attach's functionality. See [Migration to playwright-cli](#migration-to-playwright-cli) below.
+
 Upload images to GitHub Issue/PR comments and insert them with fixed width.
 
 Works with both GitHub.com and GitHub Enterprise.
+
+## Migration to playwright-cli
+
+gh-attach is no longer maintained. You can achieve the same result using playwright-cli's file chooser:
+
+```bash
+# 1. Open the Issue page
+playwright-cli open "https://github.com/owner/repo/issues/123"
+
+# 2. Get element references
+playwright-cli snapshot
+
+# 3. Click the "Paste, drop, or click to add files" button
+playwright-cli click <ref>
+
+# 4. File chooser opens — select your image
+#    → After upload, the textarea auto-inserts:
+#      ![image](https://github.com/.../user-attachments/assets/xxx)
+
+# 5. Extract the URL from the textarea
+playwright-cli snapshot
+
+# 6. Use gh api to post the comment with the image URL
+gh api repos/owner/repo/issues/123/comments -f body='![screenshot](https://github.com/.../user-attachments/assets/xxx)'
+```
+
+Key differences from gh-attach:
+- No custom upload policy handling — uses GitHub's native file attachment UI
+- No dependency on internal GitHub APIs that break across GHE versions
+- Comment posting is done via `gh api`, not through the browser
+
+---
 
 ## Requirements
 
