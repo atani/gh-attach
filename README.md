@@ -8,7 +8,7 @@ Works on **GitHub.com** and **GitHub Enterprise Server** (React-based issue page
 GitHub does not expose a public API for uploading images as
 `user-attachments/assets/<uuid>` — the format you get from drag-and-drop in the
 web UI. `gh api` alone cannot do it. `gh-attach` drives a real browser via
-[playwright-cli](https://github.com/microsoft/playwright-mcp) so you get the
+[playwright-cli](https://www.npmjs.com/package/@playwright/cli) so you get the
 exact same URL format that a human would.
 
 The common pain points `gh-attach` solves:
@@ -45,7 +45,7 @@ brew install gh-attach
 ### Manual
 
 ```bash
-npm install -g @playwright/mcp   # provides playwright-cli
+npm install -g @playwright/cli   # provides the playwright-cli binary
 git clone https://github.com/atani/gh-attach.git
 ln -s "$PWD/gh-attach/bin/gh-attach" /usr/local/bin/gh-attach
 ```
@@ -53,7 +53,7 @@ ln -s "$PWD/gh-attach/bin/gh-attach" /usr/local/bin/gh-attach
 ## Requirements
 
 - [gh CLI](https://cli.github.com/) authenticated (`gh auth login`)
-- [playwright-cli](https://github.com/microsoft/playwright-mcp) for Browser and Direct modes
+- [playwright-cli](https://www.npmjs.com/package/@playwright/cli) for Browser and Direct modes
 - [jq](https://jqlang.github.io/jq/) for Direct mode
 
 ## Quick start
