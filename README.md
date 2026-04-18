@@ -1,62 +1,32 @@
 # gh-attach
 
-> **⚠️ This repository is archived.** [playwright-cli](https://github.com/microsoft/playwright-cli) can replace gh-attach's functionality. See [Migration to playwright-cli](#migration-to-playwright-cli) below.
+Upload images to GitHub Issue/PR comments (or just get back the asset URL).
+Works on **GitHub.com** and **GitHub Enterprise Server** (React-based issue pages).
 
-Upload images to GitHub Issue/PR comments and insert them with fixed width.
+## Why this exists
 
-Works with both GitHub.com and GitHub Enterprise.
+GitHub does not expose a public API for uploading images as
+`user-attachments/assets/<uuid>` — the format you get from drag-and-drop in the
+web UI. `gh api` alone cannot do it. `gh-attach` drives a real browser via
+[playwright-cli](https://github.com/microsoft/playwright-mcp) so you get the
+exact same URL format that a human would.
 
-## Migration to playwright-cli
+The common pain points `gh-attach` solves:
 
-gh-attach is no longer maintained. You can achieve the same result using playwright-cli's file chooser:
-
-```bash
-# 1. Open the Issue page
-playwright-cli open "https://github.com/owner/repo/issues/123"
-
-# 2. Get element references
-playwright-cli snapshot
-
-# 3. Click the "Paste, drop, or click to add files" button
-playwright-cli click <ref>
-
-# 4. File chooser opens — select your image
-#    → After upload, the textarea auto-inserts:
-#      ![image](https://github.com/.../user-attachments/assets/xxx)
-
-# 5. Extract the URL from the textarea
-playwright-cli snapshot
-
-# 6. Use gh api to post the comment with the image URL
-gh api repos/owner/repo/issues/123/comments -f body='![screenshot](https://github.com/.../user-attachments/assets/xxx)'
-```
-
-Key differences from gh-attach:
-- No custom upload policy handling — uses GitHub's native file attachment UI
-- No dependency on internal GitHub APIs that break across GHE versions
-- Comment posting is done via `gh api`, not through the browser
-
----
-
-## Requirements
-
-- [gh CLI](https://cli.github.com/) (authenticated)
-- [playwright-cli](https://github.com/microsoft/playwright-mcp) (browser/direct mode, not needed for `--release` mode)
-- [jq](https://jqlang.github.io/jq/) (direct mode only)
+- **SSO / SAML re-auth every few minutes.** With `--session NAME --keep-session`,
+  gh-attach reuses a persistent playwright-cli session. One interactive login
+  in the morning, rest of the day is free.
+- **GHE React pages.** Modern GHE replaces the classic `file-attachment`
+  custom element with a React implementation. gh-attach's Browser mode
+  reads the upload URL from `textarea.value` so it works on both classic
+  and React-based pages.
+- **Scriptable URL-only mode.** `--url-only` prints the uploaded asset URLs
+  to stdout (one per line) and skips comment creation entirely, so you can
+  pipe them into `gh pr review --comment --body-file` or any other flow.
 
 ## Install
 
-### Homebrew (recommended)
-
-```bash
-brew tap atani/tap  # first time only
-brew install gh-attach
-
-# First run: login to GitHub in browser
-gh-attach --issue 1 --image ./test.png --headed
-```
-
-### gh extension
+### gh extension (recommended)
 
 ```bash
 gh extension install atani/gh-attach
@@ -65,153 +35,153 @@ gh extension install atani/gh-attach
 gh attach --issue 123 --image ./screenshot.png
 ```
 
+### Homebrew
+
+```bash
+brew tap atani/tap     # first time only
+brew install gh-attach
+```
+
 ### Manual
 
-1. Install dependencies:
-
 ```bash
-# gh CLI (if not installed)
-brew install gh
-gh auth login
-
-# playwright-cli
-npm install -g @playwright/mcp
+npm install -g @playwright/mcp   # provides playwright-cli
+git clone https://github.com/atani/gh-attach.git
+ln -s "$PWD/gh-attach/bin/gh-attach" /usr/local/bin/gh-attach
 ```
 
-2. Add to PATH:
+## Requirements
+
+- [gh CLI](https://cli.github.com/) authenticated (`gh auth login`)
+- [playwright-cli](https://github.com/microsoft/playwright-mcp) for Browser and Direct modes
+- [jq](https://jqlang.github.io/jq/) for Direct mode
+
+## Quick start
+
+### GitHub.com
 
 ```bash
-# Option A: Symlink
-ln -s /path/to/gh-attach/bin/gh-attach /usr/local/bin/gh-attach
-
-# Option B: Add to PATH
-export PATH="/path/to/gh-attach/bin:$PATH"
+gh attach --issue 123 --image ./screenshot.png
 ```
 
-### First run
+First run opens a browser window; log in to GitHub, then the session is reused.
 
-Login to GitHub in the browser session:
+### GitHub Enterprise behind SAML (the main use case)
+
+Once per laptop, log in through a named persistent session:
 
 ```bash
-gh-attach --issue 1 --image ./test.png --headed
-# Browser opens → Login to GitHub → Session is saved for future use
+playwright-cli --session ghe open --persistent https://ghe.example.com
+# → complete SAML in the browser, check "Trust this device" if offered
 ```
 
-## Usage
-
-### Basic
+Then upload without re-authenticating for the rest of the day:
 
 ```bash
-gh-attach --issue 123 --image ./screenshot.png
+gh attach \
+  --host ghe.example.com --repo owner/repo --issue 123 \
+  --session ghe --keep-session --browser \
+  --image ./screenshot.png
 ```
 
-### With comment body
+Or print only the URL and post the comment yourself:
 
 ```bash
-gh-attach --issue 123 --image ./e2e.png --body "E2E test result:"
+url=$(gh attach \
+  --host ghe.example.com --repo owner/repo --issue 123 \
+  --session ghe --keep-session --browser --url-only \
+  --image ./screenshot.png)
+
+echo "Result: <img src=\"$url\" width=\"800\">" \
+  | gh pr review 123 --repo ghe.example.com/owner/repo --comment --body-file -
 ```
 
-### Multiple images
-
-```bash
-gh-attach --issue 123 \
-  --image ./before.png \
-  --image ./after.png \
-  --body 'Before: <!-- gh-attach:IMAGE:1 -->
-After: <!-- gh-attach:IMAGE:2 -->'
-```
-
-### Release mode (no browser needed)
-
-```bash
-gh-attach --issue 123 --image ./screenshot.png --release
-```
-
-### Direct mode (GHE)
-
-For hosts configured in `~/.config/gh-attach/config`, direct mode is auto-enabled. This uploads via the upload policies API + curl, producing `user-attachments` URLs without creating release artifacts.
-
-```bash
-# ~/.config/gh-attach/config
-# direct_hosts=your-ghe-host.com
-
-gh-attach --issue 123 --image ./screenshot.png --host your-ghe-host.com --repo owner/repo
-```
-
-Use `--browser` to override and force browser mode:
-
-```bash
-gh-attach --issue 123 --image ./screenshot.png --browser
-```
-
-### From file
-
-```bash
-gh-attach --issue 123 --image ./result.png --body-file report.md
-```
-
-## Placeholders
-
-Control where images are inserted in the comment body:
-
-| Placeholder                  | Description                   |
-| ---------------------------- | ----------------------------- |
-| `<!-- gh-attach:IMAGE -->`   | Single image (or first image) |
-| `<!-- gh-attach:IMAGE:1 -->` | First image (numbered)        |
-| `<!-- gh-attach:IMAGE:2 -->` | Second image                  |
-| `<!-- gh-attach:IMAGE:N -->` | N-th image                    |
-
-If no placeholder is present, images are appended to the end.
+> **Note:** `--browser` is currently required on GHE. The Direct mode depends
+> on the classic `file-attachment` custom element, which GHE's React UI does
+> not expose. Browser mode works on both.
 
 ## Options
 
-| Option                | Required | Default          | Description                                 |
-| --------------------- | -------- | ---------------- | ------------------------------------------- |
-| `--issue <number>`    | Yes      | -                | Issue or PR number                          |
-| `--image <path>`      | Yes      | -                | Image file (can be repeated)                |
-| `--repo <owner/repo>` | No       | current repo     | Target repository                           |
-| `--width <px>`        | No       | 800              | Image width in pixels                       |
-| `--body <text>`       | No       | -                | Comment body text                           |
-| `--body-file <path>`  | No       | -                | Read body from file                         |
-| `--host <host>`       | No       | auto-detected    | GitHub host (for Enterprise)                |
-| `--release`           | No       | -                | Use GitHub Releases API (no browser needed) |
-| `--release-tag <tag>` | No       | gh-attach-assets | Release tag for uploads                     |
-| `--browser`           | No       | -                | Force browser mode (skip direct upload)     |
-| `--headed`            | No       | -                | Show browser window                         |
+| Option                | Description                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--issue <number>`    | Issue or PR number (required)                                                                                                              |
+| `--image <path>`      | Image file (can be repeated)                                                                                                               |
+| `--repo <owner/repo>` | Target repository (default: current repo)                                                                                                  |
+| `--host <host>`       | GitHub host (auto-detected)                                                                                                                |
+| `--width <px>`        | Image width in `<img>` tag (default: 800)                                                                                                  |
+| `--body <text>`       | Comment body text (supports placeholders, see below)                                                                                       |
+| `--body-file <path>`  | Read body from file                                                                                                                        |
+| `--release`           | Use GitHub Releases API (no browser needed)                                                                                                |
+| `--release-tag <tag>` | Release tag for `--release` (default: `gh-attach-assets`)                                                                                  |
+| `--browser`           | Force Browser mode (skip Direct mode)                                                                                                      |
+| `--headed`            | Show browser window (useful for first login / debugging)                                                                                   |
+| `--session <name>`    | playwright-cli session name to reuse. Combine with `--keep-session` and a one-time `playwright-cli --session NAME open --persistent URL`.  |
+| `--keep-session`      | Do not stop the browser on exit. Preserves session-only cookies and "remember this device" state across invocations.                       |
+| `--url-only`          | Print uploaded asset URLs to stdout (one per line) and skip comment creation/update entirely. `--issue` is still required as page context. |
+
+## Placeholders
+
+Control where images appear in the comment body.
+
+| Placeholder                  | Meaning                       |
+| ---------------------------- | ----------------------------- |
+| `<!-- gh-attach:IMAGE -->`   | Single image (or first image) |
+| `<!-- gh-attach:IMAGE:1 -->` | First image (numbered)        |
+| `<!-- gh-attach:IMAGE:N -->` | N-th image                    |
+
+If no placeholder is present, images are appended to the end of the body.
 
 ## Upload modes
 
-### Browser mode (default)
+### Browser mode (default; required for GHE)
 
-1. Create a comment with placeholder(s)
-2. Open GitHub in browser via playwright-cli
-3. Upload image(s) using GitHub's native upload UI
-4. Extract the uploaded URL(s)
-5. Update the comment with `<img>` tags
+1. Create a comment with placeholders
+2. Open the Issue/PR page via playwright-cli
+3. Click the native "Paste, drop, or click to add files" button
+4. Upload the image; read the resulting URL from the comment textarea
+5. Update the comment with `<img>` tags (or skip if `--url-only`)
 
 ### Release mode (`--release`)
 
-1. Create a comment with placeholder(s)
-2. Upload image(s) to a GitHub Release via `gh release upload`
-3. Update the comment with release download URLs
+Uploads are stored on a tagged Release in the repo. No browser needed, but the
+URL format is `releases/download/...` (not `user-attachments/assets/...`).
 
-### Direct mode (auto-detected)
+### Direct mode (auto-enabled for hosts in config)
 
-1. Create a comment with placeholder(s)
-2. Open GitHub in browser via playwright-cli (for authentication)
-3. Trigger the file-attachment component to obtain upload policies
-4. Upload file(s) via curl to the media server
-5. Update the comment with `user-attachments` URLs
+Faster than Browser mode because the actual upload goes over `curl` after
+playwright-cli has obtained the upload policy from the `file-attachment`
+custom element. This mode works on **GitHub.com** but not on current GHE
+because GHE's React UI does not expose the `file-attachment` element.
 
-Direct mode is auto-enabled for hosts listed in `~/.config/gh-attach/config`:
+Enable Direct mode per host:
 
 ```
-direct_hosts=host1.example.com,host2.example.com
+# ~/.config/gh-attach/config
+direct_hosts=github.com
 ```
 
-## Notes
+## Configuration file
 
-- PR comments use the same API as issue comments (use PR number)
-- Images are inserted as HTML: `<img src="..." width="800" alt="...">`
-- Browser session is persisted, so login is only needed once
-- Use `--headed` to debug or when login is required
+```
+~/.config/gh-attach/config
+```
+
+```
+# Direct mode is auto-selected for these hosts.
+# Leave empty (or omit) for Browser mode only.
+direct_hosts=github.com
+```
+
+## Troubleshooting
+
+- **SAML prompt every few hours.** The browser was torn down between
+  invocations. Run gh-attach with `--session NAME --keep-session`.
+- **`File access denied` / `ENOENT`.** Put all images under the same
+  directory; gh-attach cd's into the first image's parent so the
+  playwright daemon sees them.
+- **`Failed to get upload policy` on GHE.** Direct mode is not supported
+  on GHE yet. Add `--browser` to force Browser mode (or remove the host
+  from `direct_hosts`).
+- **`Timeout waiting for GitHub page`.** SAML session expired. Re-run
+  `playwright-cli --session NAME open --persistent URL` and complete the
+  login flow.
