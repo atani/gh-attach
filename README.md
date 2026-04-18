@@ -47,7 +47,9 @@ brew install gh-attach
 ```bash
 npm install -g @playwright/cli   # provides the playwright-cli binary
 git clone https://github.com/atani/gh-attach.git
-ln -s "$PWD/gh-attach/bin/gh-attach" /usr/local/bin/gh-attach
+# Put the script on your PATH. Adjust the target if ~/.local/bin is not on PATH.
+mkdir -p ~/.local/bin
+ln -s "$PWD/gh-attach/bin/gh-attach" ~/.local/bin/gh-attach
 ```
 
 ## Requirements
@@ -135,40 +137,34 @@ If no placeholder is present, images are appended to the end of the body.
 
 ### Browser mode (default; required for GHE)
 
-1. Create a comment with placeholders
+1. Create a comment with placeholders (skipped when `--url-only`)
 2. Open the Issue/PR page via playwright-cli
 3. Click the native "Paste, drop, or click to add files" button
 4. Upload the image; read the resulting URL from the comment textarea
-5. Update the comment with `<img>` tags (or skip if `--url-only`)
+5. Either update the placeholder comment with `<img>` tags, or (with
+   `--url-only`) print the URL to stdout and exit without touching
+   comments
 
 ### Release mode (`--release`)
 
 Uploads are stored on a tagged Release in the repo. No browser needed, but the
 URL format is `releases/download/...` (not `user-attachments/assets/...`).
 
-### Direct mode (auto-enabled for hosts in config)
+### Direct mode (opt-in per host)
 
-Faster than Browser mode because the actual upload goes over `curl` after
-playwright-cli has obtained the upload policy from the `file-attachment`
-custom element. This mode works on **GitHub.com** but not on current GHE
-because GHE's React UI does not expose the `file-attachment` element.
+Once playwright-cli has the upload policy from the `file-attachment`
+custom element, the actual upload goes over `curl` — faster than
+scripting the full browser click/upload dance. Direct mode is the
+historical github.com path (use at your own discretion; test with
+`--browser` available as a fallback). Current GitHub Enterprise does
+**not** work in Direct mode because GHE's React UI does not render
+the `file-attachment` element.
 
-Enable Direct mode per host:
+Enable Direct mode by listing hosts in `~/.config/gh-attach/config`:
 
-```
-# ~/.config/gh-attach/config
-direct_hosts=github.com
-```
-
-## Configuration file
-
-```
-~/.config/gh-attach/config
-```
-
-```
+```ini
 # Direct mode is auto-selected for these hosts.
-# Leave empty (or omit) for Browser mode only.
+# Leave the list empty or omit the file for Browser mode only.
 direct_hosts=github.com
 ```
 
