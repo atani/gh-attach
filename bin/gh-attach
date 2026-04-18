@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.6.0"
+VERSION="0.7.0"
 
 # Use bundled playwright-cli if available (Homebrew installation)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +26,13 @@ Options:
   --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
   --browser             Force browser mode (skip direct upload)
   --headed              Run browser in headed mode (visible)
+  --session <name>      playwright-cli session name (default: unnamed/default)
+  --keep-session        Do not stop the browser session on exit (keeps
+                        session-only cookies alive across invocations)
+  --url-only            Print uploaded asset URLs to stdout (one per line)
+                        and skip comment creation/update. --issue is still
+                        required (used as an authenticated page context for
+                        fetching the upload policy).
   -h, --help            Show help
   -v, --version         Show version
 
@@ -85,6 +92,9 @@ headed=""
 use_release=""
 use_browser=""
 release_tag="gh-attach-assets"
+session_name=""
+keep_session=""
+url_only=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -99,6 +109,9 @@ while [[ $# -gt 0 ]]; do
     --release-tag) release_tag="$2"; shift 2;;
     --browser) use_browser="true"; shift;;
     --headed) headed="--headed"; shift;;
+    --session) session_name="$2"; shift 2;;
+    --keep-session) keep_session="true"; shift;;
+    --url-only) url_only="true"; shift;;
     -h|--help) usage; exit 0;;
     -v|--version) echo "gh-attach $VERSION"; exit 0;;
     *)
@@ -123,6 +136,19 @@ if [[ -z "$issue" || ${#images[@]} -eq 0 ]]; then
   usage
   exit 1
 fi
+
+# Build playwright-cli session flag (empty string when default session)
+pw_cli=(playwright-cli)
+if [[ -n "$session_name" ]]; then
+  pw_cli+=(--session "$session_name")
+fi
+
+pw_stop() {
+  if [[ -n "$keep_session" ]]; then
+    return 0
+  fi
+  "${pw_cli[@]}" session-stop >/dev/null 2>&1 || true
+}
 
 if [[ -n "$body" && -n "$body_file" ]]; then
   echo "Use only one of --body or --body-file." >&2
@@ -219,10 +245,12 @@ if [[ "$has_placeholder" == "false" ]]; then
   fi
 fi
 
-# Create comment with placeholders
-comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '"\(.id)\t\(.html_url)"')"
-comment_id="${comment_info%%$'\t'*}"
-comment_url="${comment_info#*$'\t'}"
+# Create comment with placeholders (skipped in --url-only mode)
+if [[ -z "$url_only" ]]; then
+  comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '"\(.id)\t\(.html_url)"')"
+  comment_id="${comment_info%%$'\t'*}"
+  comment_url="${comment_info#*$'\t'}"
+fi
 
 # Upload images
 upload_urls=()
@@ -277,14 +305,14 @@ elif [[ -n "$use_direct" ]]; then
   # Navigate to issue/PR page (need file-attachment component for policy fetch)
   issue_url="https://$host/$repo/issues/$issue"
   # shellcheck disable=SC2086
-  playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+  "${pw_cli[@]}" open "$issue_url" $headed >/dev/null 2>&1
 
   # Wait for page to load (handle SSO/login redirects)
   echo "Waiting for page to load..." >&2
   max_wait=120
   waited=0
   while [[ $waited -lt $max_wait ]]; do
-    current_url=$(playwright-cli eval "window.location.href" 2>/dev/null || echo "")
+    current_url=$("${pw_cli[@]}" eval "window.location.href" 2>/dev/null || echo "")
     if [[ "$current_url" == *"$host"* && "$current_url" != *"/login"* && "$current_url" != *"/sso"* ]]; then
       echo "Page loaded." >&2
       break
@@ -298,7 +326,7 @@ elif [[ -n "$use_direct" ]]; then
 
   if [[ $waited -ge $max_wait ]]; then
     echo "Timeout waiting for page load." >&2
-    playwright-cli session-stop >/dev/null 2>&1
+    pw_stop
     exit 1
   fi
 
@@ -355,7 +383,7 @@ elif [[ -n "$use_direct" ]]; then
     }"
 
     echo "Fetching upload policy: $filename..." >&2
-    eval_output=$(playwright-cli eval "$js_code" 2>/dev/null)
+    eval_output=$("${pw_cli[@]}" eval "$js_code" 2>/dev/null)
     policy=$(echo "$eval_output" | sed -n '/^### Result$/{ n; p; q; }' | jq -r '.')
 
     upload_url=$(echo "$policy" | jq -r '.upload_url')
@@ -363,7 +391,7 @@ elif [[ -n "$use_direct" ]]; then
 
     if [[ -z "$upload_url" || "$upload_url" == "null" ]]; then
       echo "Failed to get upload policy for: $img" >&2
-      playwright-cli session-stop >/dev/null 2>&1
+      pw_stop
       exit 1
     fi
 
@@ -393,7 +421,7 @@ elif [[ -n "$use_direct" ]]; then
     if [[ -z "$asset_href" || "$asset_href" == "null" ]]; then
       echo "Failed to upload: $img" >&2
       echo "Response: $upload_response" >&2
-      playwright-cli session-stop >/dev/null 2>&1
+      pw_stop
       exit 1
     fi
 
@@ -401,27 +429,27 @@ elif [[ -n "$use_direct" ]]; then
 
     # Reload page for fresh tokens before next upload
     if [[ "$img" != "${images[-1]}" ]]; then
-      playwright-cli reload >/dev/null 2>&1
+      "${pw_cli[@]}" reload >/dev/null 2>&1
       sleep 3
     fi
   done
 
   # Stop browser
-  playwright-cli session-stop >/dev/null 2>&1
+  pw_stop
 else
   # Browser mode: use playwright-cli
   issue_url="https://$host/$repo/issues/$issue"
 
   # Start browser session and navigate to issue page
   # shellcheck disable=SC2086
-  playwright-cli open "$issue_url" $headed >/dev/null 2>&1
+  "${pw_cli[@]}" open "$issue_url" $headed >/dev/null 2>&1
 
   # Wait for GitHub page to load (handle SSO/login redirects)
   echo "Waiting for GitHub page to load..." >&2
   max_wait=120
   waited=0
   while [[ $waited -lt $max_wait ]]; do
-    current_url=$(playwright-cli eval "window.location.href" 2>/dev/null || echo "")
+    current_url=$("${pw_cli[@]}" eval "window.location.href" 2>/dev/null || echo "")
     if [[ "$current_url" == *"$host"* && "$current_url" == *"/issues/"* ]]; then
       echo "GitHub page loaded." >&2
       break
@@ -435,55 +463,63 @@ else
 
   if [[ $waited -ge $max_wait ]]; then
     echo "Timeout waiting for GitHub page. Please make sure you are logged in." >&2
-    playwright-cli session-stop >/dev/null 2>&1
+    pw_stop
     exit 1
   fi
 
   # Scroll down to find the comment form
-  playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
+  "${pw_cli[@]}" eval "window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
   sleep 1
 
   # Upload each image and collect URLs
   for img in "${images[@]}"; do
     # Find and click the file upload button
-    snapshot_output=$(playwright-cli snapshot 2>&1)
+    snapshot_output=$("${pw_cli[@]}" snapshot 2>&1)
     snapshot_file=$(echo "$snapshot_output" | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
     upload_button_ref=$(grep -o 'button "Paste, drop, or click to add files" \[ref=[^]]*\]' "$snapshot_file" 2>/dev/null | head -1 | grep -o 'ref=[^]]*' | cut -d= -f2)
 
     if [[ -z "$upload_button_ref" ]]; then
       echo "Could not find upload button. Make sure you are logged into GitHub." >&2
-      playwright-cli session-stop >/dev/null 2>&1
+      pw_stop
       exit 1
     fi
 
-    playwright-cli click "$upload_button_ref" >/dev/null 2>&1
+    "${pw_cli[@]}" click "$upload_button_ref" >/dev/null 2>&1
     sleep 0.5
 
     # Upload the file
-    playwright-cli upload "$img" >/dev/null 2>&1
+    "${pw_cli[@]}" upload "$img" >/dev/null 2>&1
     sleep 2
 
     # Extract the uploaded image URL from the textbox
-    snapshot_file=$(playwright-cli snapshot 2>&1 | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
+    snapshot_file=$("${pw_cli[@]}" snapshot 2>&1 | grep '\[snapshot\]' | sed 's/.*(\(.*\))/\1/')
     # Get all URLs and take the last one (most recently uploaded)
     upload_url=$(grep -oE 'src="https://[^"]+/user-attachments/assets/[^"]*"' "$snapshot_file" 2>/dev/null | tail -1 | sed 's/src="//;s/"$//')
 
     if [[ -z "$upload_url" ]]; then
       echo "Failed to get upload URL for: $img" >&2
-      playwright-cli session-stop >/dev/null 2>&1
+      pw_stop
       exit 1
     fi
 
     upload_urls+=("$upload_url")
 
     # Clear the textbox for next upload by selecting all and deleting
-    playwright-cli eval "document.activeElement.select && document.activeElement.select()" >/dev/null 2>&1
-    playwright-cli press "Backspace" >/dev/null 2>&1
+    "${pw_cli[@]}" eval "document.activeElement.select && document.activeElement.select()" >/dev/null 2>&1
+    "${pw_cli[@]}" press "Backspace" >/dev/null 2>&1
     sleep 0.5
   done
 
   # Stop the browser session
-  playwright-cli session-stop >/dev/null 2>&1
+  pw_stop
+fi
+
+# --url-only mode: just print URLs and exit (skip comment update)
+if [[ -n "$url_only" ]]; then
+  for url in "${upload_urls[@]}"; do
+    echo "$url"
+  done
+  exit 0
 fi
 
 # Replace placeholders with image tags
