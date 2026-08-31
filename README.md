@@ -108,6 +108,7 @@ echo "Result: <img src=\"$url\" width=\"800\">" \
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--issue <number>`    | Issue or PR number (required)                                                                                                              |
 | `--image <path>`      | Image file (can be repeated)                                                                                                               |
+| `--as <name>`         | Override the uploaded file name for the preceding `--image` (only affects `--release` mode)                                                |
 | `--repo <owner/repo>` | Target repository (default: current repo)                                                                                                  |
 | `--host <host>`       | GitHub host (auto-detected)                                                                                                                |
 | `--width <px>`        | Image width in `<img>` tag (default: 800)                                                                                                  |
@@ -149,6 +150,10 @@ If no placeholder is present, images are appended to the end of the body.
 
 Uploads are stored on a tagged Release in the repo. No browser needed, but the
 URL format is `releases/download/...` (not `user-attachments/assets/...`).
+
+Use `--as <name>` after an `--image` to control the file name used for the
+release asset (and therefore the download URL), e.g.
+`--image ./screenshot.png --as result.png --release`.
 
 ### Direct mode (opt-in per host)
 
