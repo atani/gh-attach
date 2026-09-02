@@ -18,15 +18,15 @@ Options:
   --repo <owner/repo>   Target repository (default: current repo)
   --issue <number>      Issue or PR number (required)
   --image <path>        Image file path to upload (required, can be repeated)
-  --as <name>           Override the uploaded file name for the preceding
-                        --image. Only affects --release mode (browser/direct
-                        modes always produce server-generated URLs).
   --width <px>          Image width in pixels (default: 800)
   --body <text>         Comment body text
   --body-file <path>    Read comment body from file
   --host <host>         GitHub host (auto-detected)
   --release             Use GitHub Releases for upload (no browser needed)
   --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
+  --unique-name         Release mode: always upload with a timestamp-suffixed
+                        name instead of overwriting an existing asset of the
+                        same name.
   --browser             Force browser mode (skip direct upload)
   --headed              Run browser in headed mode (visible)
   --session <name>      playwright-cli session name to reuse. Pair this
@@ -77,9 +77,6 @@ Examples:
   # Release mode (no browser, CLI auth only)
   gh-attach --issue 123 --image ./screenshot.png --release
 
-  # Release mode with a custom uploaded file name
-  gh-attach --issue 123 --image ./screenshot.png --as result.png --release
-
   # Force browser mode (override direct mode)
   gh-attach --issue 123 --image ./screenshot.png --browser
 
@@ -101,7 +98,6 @@ fi
 repo=""
 issue=""
 images=()
-image_names=()
 width="800"
 body=""
 body_file=""
@@ -113,26 +109,20 @@ release_tag="gh-attach-assets"
 session_name=""
 keep_session=""
 url_only=""
+unique_name_flag=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo="$2"; shift 2;;
     --issue) issue="$2"; shift 2;;
-    --image) images+=("$2"); image_names+=(""); shift 2;;
-    --as)
-      if [[ ${#images[@]} -eq 0 ]]; then
-        echo "--as must follow an --image." >&2
-        exit 1
-      fi
-      image_names[${#image_names[@]}-1]="$2"
-      shift 2
-      ;;
+    --image) images+=("$2"); shift 2;;
     --width) width="$2"; shift 2;;
     --body) body="$2"; shift 2;;
     --body-file) body_file="$2"; shift 2;;
     --host) host="$2"; shift 2;;
     --release) use_release="true"; shift;;
     --release-tag) release_tag="$2"; shift 2;;
+    --unique-name) unique_name_flag="true"; shift;;
     --browser) use_browser="true"; shift;;
     --headed) headed="--headed"; shift;;
     --session) session_name="$2"; shift 2;;
@@ -166,15 +156,6 @@ fi
 if [[ -n "$body" && -n "$body_file" ]]; then
   echo "Use only one of --body or --body-file." >&2
   exit 1
-fi
-
-if [[ -z "$use_release" ]]; then
-  for n in "${image_names[@]}"; do
-    if [[ -n "$n" ]]; then
-      echo "Warning: --as only affects --release mode; ignoring in browser/direct mode." >&2
-      break
-    fi
-  done
 fi
 
 abs_images=()
@@ -330,35 +311,31 @@ if [[ -n "$use_release" ]]; then
 
   # Upload each image with timestamp to avoid conflicts
   timestamp=$(date +%Y%m%d%H%M%S)
-  for i in "${!images[@]}"; do
-    img="${images[$i]}"
-    basename_img="${image_names[$i]:-$(basename "$img")}"
-
-    # gh release upload names the asset after the local file's basename, so
-    # when --as overrides the name, stage a temp copy under that name first.
-    upload_src="$img"
-    staged=""
-    if [[ -n "${image_names[$i]}" && "${image_names[$i]}" != "$(basename "$img")" ]]; then
-      staged="/tmp/${image_names[$i]}"
-      cp "$img" "$staged"
-      upload_src="$staged"
-    fi
-
+  for img in "${images[@]}"; do
+    basename_img="$(basename "$img")"
     ext="${basename_img##*.}"
     name="${basename_img%.*}"
     unique_name="${name}-${timestamp}-$$.${ext}"
 
-    # Upload to release
-    # shellcheck disable=SC2086
-    gh release upload "$release_tag" "$upload_src" --clobber $gh_repo_flag >/dev/null 2>&1 || {
-      # If clobber fails, try with unique name
-      cp "$upload_src" "/tmp/$unique_name"
+    if [[ -n "$unique_name_flag" ]]; then
+      # Always upload under a unique name instead of overwriting.
+      cp "$img" "/tmp/$unique_name"
       # shellcheck disable=SC2086
       gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
       rm -f "/tmp/$unique_name"
       basename_img="$unique_name"
-    }
-    [[ -n "$staged" ]] && rm -f "$staged"
+    else
+      # Upload to release
+      # shellcheck disable=SC2086
+      gh release upload "$release_tag" "$img" --clobber $gh_repo_flag >/dev/null 2>&1 || {
+        # If clobber fails, try with unique name
+        cp "$img" "/tmp/$unique_name"
+        # shellcheck disable=SC2086
+        gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
+        rm -f "/tmp/$unique_name"
+        basename_img="$unique_name"
+      }
+    fi
 
     # Build download URL
     upload_url="https://$host/$repo/releases/download/$release_tag/$basename_img"
