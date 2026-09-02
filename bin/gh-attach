@@ -24,6 +24,9 @@ Options:
   --host <host>         GitHub host (auto-detected)
   --release             Use GitHub Releases for upload (no browser needed)
   --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
+  --unique-name         Release mode: always upload with a timestamp-suffixed
+                        name instead of overwriting an existing asset of the
+                        same name.
   --browser             Force browser mode (skip direct upload)
   --headed              Run browser in headed mode (visible)
   --session <name>      playwright-cli session name to reuse. Pair this
@@ -106,6 +109,7 @@ release_tag="gh-attach-assets"
 session_name=""
 keep_session=""
 url_only=""
+unique_name_flag=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -118,6 +122,7 @@ while [[ $# -gt 0 ]]; do
     --host) host="$2"; shift 2;;
     --release) use_release="true"; shift;;
     --release-tag) release_tag="$2"; shift 2;;
+    --unique-name) unique_name_flag="true"; shift;;
     --browser) use_browser="true"; shift;;
     --headed) headed="--headed"; shift;;
     --session) session_name="$2"; shift 2;;
@@ -312,16 +317,25 @@ if [[ -n "$use_release" ]]; then
     name="${basename_img%.*}"
     unique_name="${name}-${timestamp}-$$.${ext}"
 
-    # Upload to release
-    # shellcheck disable=SC2086
-    gh release upload "$release_tag" "$img" --clobber $gh_repo_flag >/dev/null 2>&1 || {
-      # If clobber fails, try with unique name
+    if [[ -n "$unique_name_flag" ]]; then
+      # Always upload under a unique name instead of overwriting.
       cp "$img" "/tmp/$unique_name"
       # shellcheck disable=SC2086
       gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
       rm -f "/tmp/$unique_name"
       basename_img="$unique_name"
-    }
+    else
+      # Upload to release
+      # shellcheck disable=SC2086
+      gh release upload "$release_tag" "$img" --clobber $gh_repo_flag >/dev/null 2>&1 || {
+        # If clobber fails, try with unique name
+        cp "$img" "/tmp/$unique_name"
+        # shellcheck disable=SC2086
+        gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
+        rm -f "/tmp/$unique_name"
+        basename_img="$unique_name"
+      }
+    fi
 
     # Build download URL
     upload_url="https://$host/$repo/releases/download/$release_tag/$basename_img"

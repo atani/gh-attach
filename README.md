@@ -115,6 +115,7 @@ echo "Result: <img src=\"$url\" width=\"800\">" \
 | `--body-file <path>`  | Read body from file                                                                                                                        |
 | `--release`           | Use GitHub Releases API (no browser needed)                                                                                                |
 | `--release-tag <tag>` | Release tag for `--release` (default: `gh-attach-assets`)                                                                                  |
+| `--unique-name`       | Release mode: always upload with a timestamp-suffixed name instead of overwriting an existing asset of the same name                      |
 | `--browser`           | Force Browser mode (skip Direct mode)                                                                                                      |
 | `--headed`            | Show browser window (useful for first login / debugging)                                                                                   |
 | `--session <name>`    | playwright-cli session name to reuse. Combine with `--keep-session` and a one-time `playwright-cli --session NAME open --persistent URL`.  |
@@ -149,6 +150,11 @@ If no placeholder is present, images are appended to the end of the body.
 
 Uploads are stored on a tagged Release in the repo. No browser needed, but the
 URL format is `releases/download/...` (not `user-attachments/assets/...`).
+
+By default, re-uploading a file with the same name overwrites the existing
+release asset (`--clobber`). Pass `--unique-name` to always append a
+timestamp instead, so past uploads are preserved:
+`--image ./screenshot.png --release --unique-name`.
 
 ### Direct mode (opt-in per host)
 
